@@ -1,0 +1,53 @@
+name: Build SimpleMTK app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: Release build (same flags as upstream CI)
+        run: |
+          set -o pipefail
+          xcodebuild ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO \
+            -scheme SimpleMTK -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Ad-hoc sign and package
+        run: |
+          set -e
+          APP=build/Build/Products/Release/SimpleMTK.app
+          test -d "$APP"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --verbose=2 "$APP"
+          lipo -archs "$APP/Contents/MacOS/SimpleMTK"
+          mkdir -p out
+          ditto -c -k --keepParent "$APP" out/SimpleMTK.zip
+          cp "$RUNNER_TEMP/build.log" out/build.log
+          shasum -a 256 out/SimpleMTK.zip | tee out/SHA256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SimpleMTK-Release-${{ github.sha }}
+          path: out/
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
